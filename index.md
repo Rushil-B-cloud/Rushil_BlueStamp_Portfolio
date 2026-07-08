@@ -43,15 +43,9 @@ For your second milestone, explain what you've worked on since your previous mil
 
 # First Milestone
 
-**Don't forget to replace the text below with the embedding for your milestone video. Go to Youtube, click Share -> Embed, and copy and paste the code to replace what's below.**
-
 <iframe width="560" height="315" src="https://www.youtube.com/embed/voW1c66lyrg?si=G7RpWut8UKeYlnr7" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 
-For your first milestone, describe what your project is and how you plan to build it. You can include:
-- An explanation about the different components of your project and how they will all integrate together
-- Technical progress you've made so far
-- Challenges you're facing and solving in your future milestones
-- What your plan is to complete your project
+My first milestone was to integrate all the hardware components for the Routine Reinforcement armband into a electrical system. The componenets include a Arduino Nano ESP32, a accelerometer, a photoresistor, a button, a piezo buzzer, and a vibration motor. The ESP32 is a microcontroller and connects with my computer to run code onto the device. The accelermoeter detects motion and if it detects rapid motion then it will make the piezo buzzer and the vibration motor go off rapidly alerting the user of an abnormality. The photoresistor detects light and since the temperature sensor malfunctioned it is giving a mock temperature and alert the user using the same methods if it is abnormal. The button is used to turn the alert off and on by the user. The main challenge I faced with this milestone is making the DS18B20 temperature sensor not giving data and will switch to the TMP36. My next steps are to add the new tempeture sensor and integrate it into the project and start to think about potentially more sensors to add to the project.
 
 # Schematics 
 Here's where you'll put images of your schematics. [Tinkercad](https://www.tinkercad.com/blog/official-guide-to-tinkercad-circuits) and [Fritzing](https://fritzing.org/learning/) are both great resoruces to create professional schematic diagrams, though BSE recommends Tinkercad becuase it can be done easily and for free in the browser. 
