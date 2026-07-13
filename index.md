@@ -1,5 +1,5 @@
 # Routine Reinforcement Band
-My project is a simple wearable armband device that uses various sensors connected through a Arduino Nano ESP32 to remond/guide users through there routine. The device utilizes a accerlerometer, FSR pressure sensor, TMP36 temperature sensor, and a MAX30102 heart rate sensor. It also utilizes a piezo buzzer, vibration motor, and a button in order for the user to interact with the armband and turn it on and off. The biggest challenges I faced during this project was making the sensors work toghether through code and 
+My project involves developing an innovative wearable armband device that effectively assists users in navigating their routes. This device integrates various sensors connected to an Arduino Nano ESP32, including an accelerometer, a force-sensitive resistor (FSR) pressure sensor, a TMP36 temperature sensor, and a MAX30102 heart rate sensor. Additionally, it boasts a piezo buzzer, a vibration motor, and a button, empowering users to interact with the armband and easily turn it on and off. One of the key challenges I tackled during this project was ensuring the seamless integration of the sensors through efficient coding, and I successfully overcame this obstacle.
 
 | Rushil B | Strake Jesuit College Prepatory | Mechanical Engineering | Incoming Sophmore
 
