@@ -36,8 +36,7 @@ My first milestone was to integrate all the hardware components for the Routine 
 # Schematics 
 Here's where you'll put images of your schematics. [Tinkercad](https://www.tinkercad.com/blog/official-guide-to-tinkercad-circuits) and [Fritzing](https://fritzing.org/learning/) are both great resoruces to create professional schematic diagrams, though BSE recommends Tinkercad becuase it can be done easily and for free in the browser. 
 
-Pre Modification Schematic (No heart sensor)
-![Headstone Image](PreMod_schematic.png)
+![Headstone Image](IMG_0599.jpeg)
 
 # Code
 Here's where you'll put your code. The syntax below places it into a block of code. Follow the guide [here]([url](https://www.markdownguide.org/extended-syntax/)) to learn how to customize it to your project needs. 
