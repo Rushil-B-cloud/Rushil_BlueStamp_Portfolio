@@ -11,13 +11,9 @@ My project involves developing an innovative wearable armband device that effect
 
 **Don't forget to replace the text below with the embedding for your milestone video. Go to Youtube, click Share -> Embed, and copy and paste the code to replace what's below.**
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/F7M7imOVGug" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/VBQnCcKGXJs?si=IrSFi-EZITUYmr_G" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 
-For your final milestone, explain the outcome of your project. Key details to include are:
-- What you've accomplished since your previous milestone
-- What your biggest challenges and triumphs were at BSE
-- A summary of key topics you learned about
-- What you hope to learn in the future after everything you've learned at BSE
+For my final milestone, I added a heart rate sensor and worked to integrate all the sensors, focusing on the main challenge of getting them to function together. The heart rate sensor operated correctly on its own or alongside the accelerometer, but when I included the temperature sensor and additional output components, it stopped returning any values. Despite this setback, the project taught me a great deal about Arduino and basic wiring. Moving forward, I hope to tackle even more complex projects that include additional components and advanced programming.
 
 
 
@@ -40,17 +36,584 @@ Here's where you'll put images of your schematics. [Tinkercad](https://www.tinke
 
 # Code
 Here's where you'll put your code. The syntax below places it into a block of code. Follow the guide [here]([url](https://www.markdownguide.org/extended-syntax/)) to learn how to customize it to your project needs. 
-
+Heart rate sensor and accerlerometer together
 ```c++
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  Serial.println("Hello World!");
+#include <Wire.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+
+MAX30105 particleSensor;
+
+const int MPU_ADDR = 0x68;
+
+// Faster BPM response
+const byte RATE_SIZE = 2;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+
+float beatsPerMinute = 0;
+int beatAvg = 0;
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println("Initializing sensors...");
+
+  // Initialize I2C
+  Wire.begin();
+
+  // ---------- MAX30105 ----------
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST))
+  {
+    Serial.println("MAX30105 NOT FOUND!");
+    while (1);
+  }
+
+  Serial.println("MAX30105 Found!");
+
+  particleSensor.setup();
+  particleSensor.setPulseAmplitudeRed(0x3F);
+  particleSensor.setPulseAmplitudeIR(0x3F);
+  particleSensor.setPulseAmplitudeGreen(0);
+
+  // ---------- MPU6050 ----------
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);
+  Wire.write(0);   // Wake up MPU6050
+
+  if (Wire.endTransmission() == 0)
+  {
+    Serial.println("MPU6050 Found!");
+  }
+  else
+  {
+    Serial.println("MPU6050 NOT FOUND!");
+    while (1);
+  }
+
+  Serial.println("Setup Complete.");
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
+void loop()
+{
+  // =============================
+  // MAX30105 Heart Rate
+  // =============================
+  long irValue = particleSensor.getIR();
 
+  if (checkForBeat(irValue))
+  {
+    long delta = millis() - lastBeat;
+    lastBeat = millis();
+
+    beatsPerMinute = 60.0 / (delta / 1000.0);
+
+    if (beatsPerMinute > 40 && beatsPerMinute < 180)
+    {
+      rates[rateSpot++] = (byte)beatsPerMinute;
+      rateSpot %= RATE_SIZE;
+
+      beatAvg = 0;
+      for (byte i = 0; i < RATE_SIZE; i++)
+        beatAvg += rates[i];
+
+      beatAvg /= RATE_SIZE;
+    }
+  }
+
+  // =============================
+  // MPU6050 Accelerometer
+  // =============================
+  int16_t accelX, accelY, accelZ;
+
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+
+  Wire.requestFrom(MPU_ADDR, 6, true);
+
+  if (Wire.available() >= 6)
+  {
+    accelX = Wire.read() << 8 | Wire.read();
+    accelY = Wire.read() << 8 | Wire.read();
+    accelZ = Wire.read() << 8 | Wire.read();
+  }
+
+  // =============================
+  // Print Everything
+  // =============================
+  Serial.print("IR: ");
+  Serial.print(irValue);
+
+  Serial.print(" | BPM: ");
+  Serial.print(beatsPerMinute, 1);
+
+  Serial.print(" | Avg: ");
+  Serial.print(beatAvg);
+
+  Serial.print(" | X: ");
+  Serial.print(accelX);
+
+  Serial.print(" | Y: ");
+  Serial.print(accelY);
+
+  Serial.print(" | Z: ");
+  Serial.println(accelZ);
+
+  delay(5);
+}
+```
+The code with all the sensors working together
+``` c++
+#include <Wire.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+
+// ==========================
+// PIN DEFINITIONS
+// ==========================
+
+const int motorPin = D9;
+const int buzzerPin = D8;
+const int buttonPin = D2;
+const int tempPin = A0;
+
+// ==========================
+// SENSORS
+// ==========================
+
+MAX30105 particleSensor;
+
+const int MPU_ADDR = 0x68;
+
+// ==========================
+// HEART RATE VARIABLES
+// ==========================
+
+// Smaller average for faster response
+const byte RATE_SIZE = 2;
+
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+
+long lastBeat = 0;
+
+float BPM = 0;
+int averageBPM = 0;
+
+// ==========================
+// Alert Timing
+// ==========================
+
+unsigned long lastAlertTime = 0;
+bool alertState = false;
+
+// ==========================
+// Sensor Filtering
+// ==========================
+
+const int TEMP_SAMPLES = 10;
+
+float tempReadings[TEMP_SAMPLES];
+int tempIndex = 0;
+
+// ==========================
+// ALERT SETTINGS
+// ==========================
+
+bool tempAlert = false;
+bool heartAlert = false;
+bool motionAlert = false;
+
+bool alertsMuted = false;
+bool lastButton = HIGH;
+
+// Temperature Limits
+
+const float LOW_TEMP = 95.0;
+const float HIGH_TEMP = 100.4;
+
+// Heart Rate Limits
+
+const int LOW_BPM = 50;
+const int HIGH_BPM = 120;
+
+// Motion Limit
+
+const float MOTION_LIMIT = 2.3;
+
+// ==========================
+// SETUP
+// ==========================
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+
+    pinMode(motorPin, OUTPUT);
+    pinMode(buzzerPin, OUTPUT);
+    pinMode(buttonPin, INPUT_PULLUP);
+
+    digitalWrite(motorPin, LOW);
+    noTone(buzzerPin);
+
+    analogReadResolution(12);
+    analogSetPinAttenuation(tempPin, ADC_11db);
+
+    // Initialize temperature averaging array
+    for (int i = 0; i < TEMP_SAMPLES; i++)
+    {
+        tempReadings[i] = 98.6;
+    }
+
+    // I2C
+    Wire.begin();
+
+    // --------------------------
+    // MPU6050
+    // --------------------------
+
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x6B);
+    Wire.write(0);
+    Wire.endTransmission();
+
+    // --------------------------
+    // MAX30105
+    // --------------------------
+
+    if (!particleSensor.begin(Wire, I2C_SPEED_FAST))
+    {
+        Serial.println("MAX30105 NOT FOUND");
+        while (1);
+    }
+
+    particleSensor.setup();
+
+    particleSensor.setPulseAmplitudeRed(0x3F);
+    particleSensor.setPulseAmplitudeIR(0x3F);
+    particleSensor.setPulseAmplitudeGreen(0);
+
+    Serial.println("Routine Armband Ready");
+}
+// ==========================
+// MAIN LOOP
+// ==========================
+
+void loop()
+{
+    checkButton();
+
+    // Read sensors
+    readHeartRate();
+    float temperatureF = readTemperature();
+    float acceleration = readAccelerometer();
+
+    // --------------------------
+    // Temperature Alert
+    // --------------------------
+    tempAlert = (temperatureF < LOW_TEMP || temperatureF > HIGH_TEMP);
+
+    // --------------------------
+    // Heart Rate Alert
+    // --------------------------
+    heartAlert = false;
+
+    if (averageBPM > 0)
+    {
+        if (averageBPM < LOW_BPM || averageBPM > HIGH_BPM)
+        {
+            heartAlert = true;
+        }
+    }
+
+    // --------------------------
+    // Motion Alert
+    // --------------------------
+    motionAlert = (acceleration > MOTION_LIMIT);
+
+    updateAlert();
+
+    printData(temperatureF, acceleration);
+
+    // Small delay so the MAX30105 is read frequently
+    delay(5);
+}
+
+
+// ==========================
+// TMP36 TEMPERATURE
+// ==========================
+
+float readTemperature()
+{
+    float voltage = analogReadMilliVolts(tempPin) / 1000.0;
+
+    float tempC = (voltage - 0.5) * 100.0;
+    float tempF = (tempC * 9.0 / 5.0) + 32.0;
+
+    // Store newest reading
+    tempReadings[tempIndex] = tempF;
+
+    tempIndex++;
+
+    if (tempIndex >= TEMP_SAMPLES)
+    {
+        tempIndex = 0;
+    }
+
+    // Average temperature
+    float average = 0;
+
+    for (int i = 0; i < TEMP_SAMPLES; i++)
+    {
+        average += tempReadings[i];
+    }
+
+    average /= TEMP_SAMPLES;
+
+    return average;
+}
+
+
+// ==========================
+// HEART RATE
+// ==========================
+
+void readHeartRate()
+{
+    // Check for new samples from the MAX30105
+    particleSensor.check();
+
+    while (particleSensor.available())
+    {
+        long irValue = particleSensor.getIR();
+
+        if (checkForBeat(irValue))
+        {
+            long delta = millis() - lastBeat;
+            lastBeat = millis();
+
+            BPM = 60.0 / (delta / 1000.0);
+
+            if (BPM > 40 && BPM < 180)
+            {
+                rates[rateSpot++] = (byte)BPM;
+                rateSpot %= RATE_SIZE;
+
+                averageBPM = 0;
+
+                for (byte i = 0; i < RATE_SIZE; i++)
+                {
+                    averageBPM += rates[i];
+                }
+
+                averageBPM /= RATE_SIZE;
+            }
+        }
+
+        // Move to the next unread sample
+        particleSensor.nextSample();
+    }
+}
+// ==========================
+// MPU6050
+// ==========================
+
+float readAccelerometer()
+{
+    int16_t x, y, z;
+
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x3B);
+
+    if (Wire.endTransmission(false) != 0)
+    {
+        return 0;
+    }
+
+    Wire.requestFrom(MPU_ADDR, 6, true);
+
+    if (Wire.available() < 6)
+    {
+        return 0;
+    }
+
+    x = (Wire.read() << 8) | Wire.read();
+    y = (Wire.read() << 8) | Wire.read();
+    z = (Wire.read() << 8) | Wire.read();
+
+    float ax = x / 16384.0;
+    float ay = y / 16384.0;
+    float az = z / 16384.0;
+
+    float totalG = sqrt(ax * ax + ay * ay + az * az);
+
+    return totalG;
+}
+
+
+// ==========================
+// BUTTON
+// ==========================
+
+void checkButton()
+{
+    bool current = digitalRead(buttonPin);
+
+    if (lastButton == HIGH && current == LOW)
+    {
+        alertsMuted = !alertsMuted;
+
+        Serial.println(
+            alertsMuted ?
+            "Alerts OFF" :
+            "Alerts ON"
+        );
+
+        delay(250);   // Simple debounce
+    }
+
+    lastButton = current;
+}
+
+
+// ==========================
+// ALERT OUTPUT
+// ==========================
+
+void updateAlert()
+{
+    unsigned long now = millis();
+
+    // No alerts
+    if (!tempAlert && !heartAlert && !motionAlert)
+    {
+        digitalWrite(motorPin, LOW);
+        noTone(buzzerPin);
+        return;
+    }
+
+    // Alerts muted
+    if (alertsMuted)
+    {
+        digitalWrite(motorPin, LOW);
+        noTone(buzzerPin);
+        return;
+    }
+
+    // --------------------------
+    // HEART RATE ALERT
+    // --------------------------
+    if (heartAlert)
+    {
+        if (now - lastAlertTime >= 250)
+        {
+            alertState = !alertState;
+            lastAlertTime = now;
+        }
+
+        if (alertState)
+        {
+            tone(buzzerPin, 2500);
+            digitalWrite(motorPin, HIGH);
+        }
+        else
+        {
+            noTone(buzzerPin);
+            digitalWrite(motorPin, LOW);
+        }
+
+        return;
+    }
+
+    // --------------------------
+    // TEMPERATURE ALERT
+    // --------------------------
+    if (tempAlert)
+    {
+        if (now - lastAlertTime >= 1000)
+        {
+            alertState = !alertState;
+            lastAlertTime = now;
+        }
+
+        if (alertState)
+        {
+            tone(buzzerPin, 1500);
+            digitalWrite(motorPin, HIGH);
+        }
+        else
+        {
+            noTone(buzzerPin);
+            digitalWrite(motorPin, LOW);
+        }
+
+        return;
+    }
+
+    // --------------------------
+    // MOTION ALERT
+    // --------------------------
+    if (motionAlert)
+    {
+        digitalWrite(motorPin, HIGH);
+        tone(buzzerPin, 1000);
+
+        delay(100);
+
+        digitalWrite(motorPin, LOW);
+        noTone(buzzerPin);
+    }
+}
+// ==========================
+// SERIAL DISPLAY
+// ==========================
+
+void printData(float temp, float g)
+{
+    Serial.print("Temp: ");
+    Serial.print(temp, 1);
+    Serial.print(" F");
+
+    Serial.print(" | BPM: ");
+    if (averageBPM > 0)
+        Serial.print(averageBPM);
+    else
+        Serial.print("--");
+
+    Serial.print(" | Current BPM: ");
+    if (BPM > 0)
+        Serial.print(BPM, 1);
+    else
+        Serial.print("--");
+
+    Serial.print(" | G: ");
+    Serial.print(g, 2);
+
+    Serial.print(" | Alerts: ");
+
+    if (!tempAlert && !heartAlert && !motionAlert)
+    {
+        Serial.print("None");
+    }
+    else
+    {
+        if (tempAlert)
+            Serial.print("TEMP ");
+
+        if (heartAlert)
+            Serial.print("HEART ");
+
+        if (motionAlert)
+            Serial.print("MOTION ");
+    }
+
+    Serial.println();
 }
 ```
 
@@ -71,3 +634,5 @@ void loop() {
 
 # Other Resources/Examples
 - [Base Project Original link](https://www.instructables.com/Routine-Reinforcement-Armband/)
+- [Armband Notes google doc](https://docs.google.com/document/d/1VrPdPcL-Z65wnyhI12oAp2Bm2EwKIptNxDfZ0WaQimU/edit?tab=t.0#heading=h.6mrcrt2tdxpz)
+- 
