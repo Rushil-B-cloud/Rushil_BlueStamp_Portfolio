@@ -36,135 +36,6 @@ Heart rate sensor and accerlerometer together
 #include "MAX30105.h"
 #include "heartRate.h"
 
-MAX30105 particleSensor;
-
-const int MPU_ADDR = 0x68;
-
-// Faster BPM response
-const byte RATE_SIZE = 2;
-byte rates[RATE_SIZE];
-byte rateSpot = 0;
-long lastBeat = 0;
-
-float beatsPerMinute = 0;
-int beatAvg = 0;
-
-void setup()
-{
-  Serial.begin(115200);
-  delay(2000);
-
-  Serial.println("Initializing sensors...");
-
-  // Initialize I2C
-  Wire.begin();
-
-  // ---------- MAX30105 ----------
-  if (!particleSensor.begin(Wire, I2C_SPEED_FAST))
-  {
-    Serial.println("MAX30105 NOT FOUND!");
-    while (1);
-  }
-
-  Serial.println("MAX30105 Found!");
-
-  particleSensor.setup();
-  particleSensor.setPulseAmplitudeRed(0x3F);
-  particleSensor.setPulseAmplitudeIR(0x3F);
-  particleSensor.setPulseAmplitudeGreen(0);
-
-  // ---------- MPU6050 ----------
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B);
-  Wire.write(0);   // Wake up MPU6050
-
-  if (Wire.endTransmission() == 0)
-  {
-    Serial.println("MPU6050 Found!");
-  }
-  else
-  {
-    Serial.println("MPU6050 NOT FOUND!");
-    while (1);
-  }
-
-  Serial.println("Setup Complete.");
-}
-
-void loop()
-{
-  // =============================
-  // MAX30105 Heart Rate
-  // =============================
-  long irValue = particleSensor.getIR();
-
-  if (checkForBeat(irValue))
-  {
-    long delta = millis() - lastBeat;
-    lastBeat = millis();
-
-    beatsPerMinute = 60.0 / (delta / 1000.0);
-
-    if (beatsPerMinute > 40 && beatsPerMinute < 180)
-    {
-      rates[rateSpot++] = (byte)beatsPerMinute;
-      rateSpot %= RATE_SIZE;
-
-      beatAvg = 0;
-      for (byte i = 0; i < RATE_SIZE; i++)
-        beatAvg += rates[i];
-
-      beatAvg /= RATE_SIZE;
-    }
-  }
-
-  // =============================
-  // MPU6050 Accelerometer
-  // =============================
-  int16_t accelX, accelY, accelZ;
-
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-
-  Wire.requestFrom(MPU_ADDR, 6, true);
-
-  if (Wire.available() >= 6)
-  {
-    accelX = Wire.read() << 8 | Wire.read();
-    accelY = Wire.read() << 8 | Wire.read();
-    accelZ = Wire.read() << 8 | Wire.read();
-  }
-
-  // =============================
-  // Print Everything
-  // =============================
-  Serial.print("IR: ");
-  Serial.print(irValue);
-
-  Serial.print(" | BPM: ");
-  Serial.print(beatsPerMinute, 1);
-
-  Serial.print(" | Avg: ");
-  Serial.print(beatAvg);
-
-  Serial.print(" | X: ");
-  Serial.print(accelX);
-
-  Serial.print(" | Y: ");
-  Serial.print(accelY);
-
-  Serial.print(" | Z: ");
-  Serial.println(accelZ);
-
-  delay(5);
-}
-```
-The code with all the sensors working together
-``` c++
-#include <Wire.h>
-#include "MAX30105.h"
-#include "heartRate.h"
 
 // ==========================
 // PIN DEFINITIONS
@@ -175,6 +46,7 @@ const int buzzerPin = D8;
 const int buttonPin = D2;
 const int tempPin = A0;
 
+
 // ==========================
 // SENSORS
 // ==========================
@@ -183,20 +55,18 @@ MAX30105 particleSensor;
 
 const int MPU_ADDR = 0x68;
 
+
 // ==========================
 // HEART RATE VARIABLES
 // ==========================
 
-// Smaller average for faster response
-const byte RATE_SIZE = 2;
-
+const byte RATE_SIZE = 4;
 byte rates[RATE_SIZE];
 byte rateSpot = 0;
-
 long lastBeat = 0;
-
 float BPM = 0;
 int averageBPM = 0;
+
 
 // ==========================
 // Alert Timing
@@ -205,14 +75,15 @@ int averageBPM = 0;
 unsigned long lastAlertTime = 0;
 bool alertState = false;
 
+
 // ==========================
 // Sensor Filtering
 // ==========================
 
 const int TEMP_SAMPLES = 10;
-
 float tempReadings[TEMP_SAMPLES];
 int tempIndex = 0;
+
 
 // ==========================
 // ALERT SETTINGS
@@ -221,23 +92,52 @@ int tempIndex = 0;
 bool tempAlert = false;
 bool heartAlert = false;
 bool motionAlert = false;
-
 bool alertsMuted = false;
 bool lastButton = HIGH;
 
-// Temperature Limits
 
-const float LOW_TEMP = 95.0;
-const float HIGH_TEMP = 100.4;
+// Temperature Fahrenheit limits
+const float LOW_TEMP = 70.0;
+const float HIGH_TEMP = 80.4;
 
-// Heart Rate Limits
-
+// Heart rate limits
 const int LOW_BPM = 50;
 const int HIGH_BPM = 120;
 
-// Motion Limit
-
+// Motion limit
 const float MOTION_LIMIT = 2.3;
+
+
+// ==========================
+// ADC CALIBRATION
+// ==========================
+// This board's ADC reads ~185mV LOW vs a multimeter measurement at
+// the same pin (measured: actual ~750mV, ESP32 reported ~565mV).
+// That's a fixed offset error, so we just add it back before doing
+// the temperature math. If readings still look off after this,
+// re-measure with a multimeter and adjust this constant:
+//   TEMP_CALIBRATION_OFFSET_MV = (multimeter mV) - (rawMV from debug print)
+const float TEMP_CALIBRATION_OFFSET_MV = 185.0;
+
+
+// ==========================
+// NON-BLOCKING SCHEDULING
+// ==========================
+// Everything EXCEPT heart-rate sampling only needs to run
+// occasionally. Running it on a timer (instead of every loop
+// pass, and instead of using delay()) keeps loop() fast enough
+// that getIR()/checkForBeat() can sample at full speed, which is
+// what the MAX30105 beat-detection algorithm needs to work.
+
+unsigned long lastSlowUpdate = 0;
+const unsigned long SLOW_UPDATE_INTERVAL_MS = 20; // ~50Hz for temp/accel/alerts/print
+
+unsigned long lastButtonChangeTime = 0;
+const unsigned long BUTTON_DEBOUNCE_MS = 250;
+
+float currentTempF = 0;
+float currentAccel = 0;
+
 
 // ==========================
 // SETUP
@@ -255,31 +155,19 @@ void setup()
     digitalWrite(motorPin, LOW);
     noTone(buzzerPin);
 
+    // ESP32 ADC setup
     analogReadResolution(12);
     analogSetPinAttenuation(tempPin, ADC_11db);
 
-    // Initialize temperature averaging array
-    for (int i = 0; i < TEMP_SAMPLES; i++)
-    {
-        tempReadings[i] = 98.6;
-    }
-
-    // I2C
     Wire.begin();
 
-    // --------------------------
-    // MPU6050
-    // --------------------------
-
+    // Start MPU6050
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x6B);
     Wire.write(0);
     Wire.endTransmission();
 
-    // --------------------------
-    // MAX30105
-    // --------------------------
-
+    // Start MAX30105
     if (!particleSensor.begin(Wire, I2C_SPEED_FAST))
     {
         Serial.println("MAX30105 NOT FOUND");
@@ -287,55 +175,56 @@ void setup()
     }
 
     particleSensor.setup();
-
     particleSensor.setPulseAmplitudeRed(0x3F);
     particleSensor.setPulseAmplitudeIR(0x3F);
     particleSensor.setPulseAmplitudeGreen(0);
 
     Serial.println("Routine Armband Ready");
 }
+
+
 // ==========================
 // MAIN LOOP
 // ==========================
 
 void loop()
 {
-    checkButton();
-
-    // Read sensors
+    // Sample the heart rate sensor every single pass, no delay,
+    // no blocking calls before it. This is the fix: it used to be
+    // starved by delay(100) + ADC reads + I2C accel reads.
     readHeartRate();
-    float temperatureF = readTemperature();
-    float acceleration = readAccelerometer();
 
-    // --------------------------
-    // Temperature Alert
-    // --------------------------
-    tempAlert = (temperatureF < LOW_TEMP || temperatureF > HIGH_TEMP);
+    unsigned long now = millis();
 
-    // --------------------------
-    // Heart Rate Alert
-    // --------------------------
-    heartAlert = false;
-
-    if (averageBPM > 0)
+    if (now - lastSlowUpdate >= SLOW_UPDATE_INTERVAL_MS)
     {
-        if (averageBPM < LOW_BPM || averageBPM > HIGH_BPM)
+        lastSlowUpdate = now;
+
+        checkButton();
+
+        currentTempF = readTemperature();
+        currentAccel = readAccelerometer();
+
+        // Check temperature
+        tempAlert = (currentTempF < LOW_TEMP || currentTempF > HIGH_TEMP);
+
+        // Check heart rate
+        heartAlert = false;
+        if (averageBPM > 0)
         {
-            heartAlert = true;
+            if (averageBPM < LOW_BPM || averageBPM > HIGH_BPM)
+            {
+                heartAlert = true;
+            }
         }
+
+        // Check motion
+        motionAlert = (currentAccel > MOTION_LIMIT);
+
+        updateAlert();
+        printData(currentTempF, currentAccel);
+        printDebug();
     }
-
-    // --------------------------
-    // Motion Alert
-    // --------------------------
-    motionAlert = (acceleration > MOTION_LIMIT);
-
-    updateAlert();
-
-    printData(temperatureF, acceleration);
-
-    // Small delay so the MAX30105 is read frequently
-    delay(5);
 }
 
 
@@ -343,31 +232,31 @@ void loop()
 // TMP36 TEMPERATURE
 // ==========================
 
+float lastRawMilliVolts = 0;      // uncalibrated ADC reading, kept for debug
+float lastCalibratedMilliVolts = 0; // after applying the offset
+
 float readTemperature()
 {
-    float voltage = analogReadMilliVolts(tempPin) / 1000.0;
+    lastRawMilliVolts = analogReadMilliVolts(tempPin);
+    lastCalibratedMilliVolts = lastRawMilliVolts + TEMP_CALIBRATION_OFFSET_MV;
+
+    float voltage = lastCalibratedMilliVolts / 1000.0;
 
     float tempC = (voltage - 0.5) * 100.0;
     float tempF = (tempC * 9.0 / 5.0) + 32.0;
 
-    // Store newest reading
     tempReadings[tempIndex] = tempF;
-
     tempIndex++;
-
     if (tempIndex >= TEMP_SAMPLES)
     {
         tempIndex = 0;
     }
 
-    // Average temperature
     float average = 0;
-
     for (int i = 0; i < TEMP_SAMPLES; i++)
     {
         average += tempReadings[i];
     }
-
     average /= TEMP_SAMPLES;
 
     return average;
@@ -380,66 +269,53 @@ float readTemperature()
 
 void readHeartRate()
 {
-    // Check for new samples from the MAX30105
-    particleSensor.check();
+    long irValue = particleSensor.getIR();
 
-    while (particleSensor.available())
+    if (checkForBeat(irValue))
     {
-        long irValue = particleSensor.getIR();
+        long delta = millis() - lastBeat;
+        lastBeat = millis();
 
-        if (checkForBeat(irValue))
+        BPM = 60 / (delta / 1000.0);
+
+        if (BPM > 40 && BPM < 180)
         {
-            long delta = millis() - lastBeat;
-            lastBeat = millis();
+            rates[rateSpot++] = (byte)BPM;
+            rateSpot %= RATE_SIZE;
 
-            BPM = 60.0 / (delta / 1000.0);
-
-            if (BPM > 40 && BPM < 180)
+            averageBPM = 0;
+            for (byte i = 0; i < RATE_SIZE; i++)
             {
-                rates[rateSpot++] = (byte)BPM;
-                rateSpot %= RATE_SIZE;
-
-                averageBPM = 0;
-
-                for (byte i = 0; i < RATE_SIZE; i++)
-                {
-                    averageBPM += rates[i];
-                }
-
-                averageBPM /= RATE_SIZE;
+                averageBPM += rates[i];
             }
+            averageBPM /= RATE_SIZE;
         }
-
-        // Move to the next unread sample
-        particleSensor.nextSample();
     }
 }
+
+
 // ==========================
 // MPU6050
 // ==========================
 
 float readAccelerometer()
 {
-    int16_t x, y, z;
+    int16_t x = 0;
+    int16_t y = 0;
+    int16_t z = 0;
 
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);
-
-    if (Wire.endTransmission(false) != 0)
-    {
-        return 0;
-    }
+    Wire.endTransmission(false);
 
     Wire.requestFrom(MPU_ADDR, 6, true);
 
-    if (Wire.available() < 6)
+    if (Wire.available() >= 6)
     {
-        return 0;
+        x = Wire.read() << 8 | Wire.read();
+        y = Wire.read() << 8 | Wire.read();
+        z = Wire.read() << 8 | Wire.read();
     }
-
-    x = (Wire.read() << 8) | Wire.read();
-    y = (Wire.read() << 8) | Wire.read();
-    z = (Wire.read() << 8) | Wire.read();
 
     float ax = x / 16384.0;
     float ay = y / 16384.0;
@@ -452,24 +328,22 @@ float readAccelerometer()
 
 
 // ==========================
-// BUTTON
+// BUTTON (non-blocking debounce)
 // ==========================
 
 void checkButton()
 {
     bool current = digitalRead(buttonPin);
+    unsigned long now = millis();
 
-    if (lastButton == HIGH && current == LOW)
+    if (lastButton == HIGH && current == LOW &&
+        (now - lastButtonChangeTime > BUTTON_DEBOUNCE_MS))
     {
         alertsMuted = !alertsMuted;
 
-        Serial.println(
-            alertsMuted ?
-            "Alerts OFF" :
-            "Alerts ON"
-        );
+        Serial.println(alertsMuted ? "Alerts OFF" : "Alerts ON");
 
-        delay(250);   // Simple debounce
+        lastButtonChangeTime = now;
     }
 
     lastButton = current;
@@ -477,7 +351,7 @@ void checkButton()
 
 
 // ==========================
-// ALERT OUTPUT
+// ALERT OUTPUT (non-blocking)
 // ==========================
 
 void updateAlert()
@@ -492,7 +366,7 @@ void updateAlert()
         return;
     }
 
-    // Alerts muted
+    // If muted
     if (alertsMuted)
     {
         digitalWrite(motorPin, LOW);
@@ -500,12 +374,10 @@ void updateAlert()
         return;
     }
 
-    // --------------------------
     // HEART RATE ALERT
-    // --------------------------
     if (heartAlert)
     {
-        if (now - lastAlertTime >= 250)
+        if (now - lastAlertTime > 250)
         {
             alertState = !alertState;
             lastAlertTime = now;
@@ -521,16 +393,12 @@ void updateAlert()
             noTone(buzzerPin);
             digitalWrite(motorPin, LOW);
         }
-
-        return;
     }
 
-    // --------------------------
     // TEMPERATURE ALERT
-    // --------------------------
-    if (tempAlert)
+    else if (tempAlert)
     {
-        if (now - lastAlertTime >= 1000)
+        if (now - lastAlertTime > 1000)
         {
             alertState = !alertState;
             lastAlertTime = now;
@@ -546,24 +414,22 @@ void updateAlert()
             noTone(buzzerPin);
             digitalWrite(motorPin, LOW);
         }
-
-        return;
     }
 
-    // --------------------------
-    // MOTION ALERT
-    // --------------------------
-    if (motionAlert)
+    // MOTION ALERT (was a blocking delay(100), now non-blocking pulse)
+    else if (motionAlert)
     {
-        digitalWrite(motorPin, HIGH);
-        tone(buzzerPin, 1000);
+        if (now - lastAlertTime > 100)
+        {
+            alertState = !alertState;
+            lastAlertTime = now;
+        }
 
-        delay(100);
-
-        digitalWrite(motorPin, LOW);
-        noTone(buzzerPin);
+        digitalWrite(motorPin, alertState ? HIGH : LOW);
     }
 }
+
+
 // ==========================
 // SERIAL DISPLAY
 // ==========================
@@ -571,43 +437,42 @@ void updateAlert()
 void printData(float temp, float g)
 {
     Serial.print("Temp: ");
-    Serial.print(temp, 1);
-    Serial.print(" F");
+    Serial.print(temp);
 
-    Serial.print(" | BPM: ");
-    if (averageBPM > 0)
-        Serial.print(averageBPM);
-    else
-        Serial.print("--");
-
-    Serial.print(" | Current BPM: ");
-    if (BPM > 0)
-        Serial.print(BPM, 1);
-    else
-        Serial.print("--");
+    Serial.print(" F | BPM: ");
+    Serial.print(averageBPM);
 
     Serial.print(" | G: ");
-    Serial.print(g, 2);
+    Serial.println(g);
+}
 
-    Serial.print(" | Alerts: ");
 
-    if (!tempAlert && !heartAlert && !motionAlert)
-    {
-        Serial.print("None");
-    }
-    else
-    {
-        if (tempAlert)
-            Serial.print("TEMP ");
+// ==========================
+// DEBUG: raw sensor + flag states
+// ==========================
+// Prints the raw temp sensor voltage (to sanity-check wiring/sensor
+// type) and every alert flag (to catch priority-masking or a stuck
+// alertsMuted state). Remove once things are confirmed working.
 
-        if (heartAlert)
-            Serial.print("HEART ");
+void printDebug()
+{
+    Serial.print("  [debug] rawMV: ");
+    Serial.print(lastRawMilliVolts);
 
-        if (motionAlert)
-            Serial.print("MOTION ");
-    }
+    Serial.print(" | calibratedMV: ");
+    Serial.print(lastCalibratedMilliVolts);
 
-    Serial.println();
+    Serial.print(" | tempAlert: ");
+    Serial.print(tempAlert);
+
+    Serial.print(" | heartAlert: ");
+    Serial.print(heartAlert);
+
+    Serial.print(" | motionAlert: ");
+    Serial.print(motionAlert);
+
+    Serial.print(" | muted: ");
+    Serial.println(alertsMuted);
 }
 ```
 
