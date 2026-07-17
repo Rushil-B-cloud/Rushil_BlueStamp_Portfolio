@@ -30,7 +30,7 @@ My first milestone was to integrate all the hardware components for the Routine 
 ![Headstone Image](IMG_0599.jpeg)
 
 # Code
-Heart rate sensor and accerlerometer together
+Final code
 ```c++
 #include <Wire.h>
 #include "MAX30105.h"
